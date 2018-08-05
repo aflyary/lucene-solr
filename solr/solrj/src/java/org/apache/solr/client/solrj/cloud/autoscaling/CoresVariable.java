@@ -17,9 +17,9 @@
 
 package org.apache.solr.client.solrj.cloud.autoscaling;
 
+import java.util.Collection;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
-
-import org.apache.solr.common.cloud.rule.ImplicitSnitch;
 
 import static org.apache.solr.common.params.CollectionParams.CollectionAction.MOVEREPLICA;
 
@@ -35,13 +35,14 @@ public class CoresVariable extends VariableBase {
 
   @Override
   public void addViolatingReplicas(Violation.Ctx ctx) {
-    for (Row r : ctx.allRows) {
-      if (!ctx.clause.tag.isPass(r)) {
-        r.forEachReplica(replicaInfo -> ctx.currentViolation
+    for (Row row : ctx.allRows) {
+      if (row.node.equals(ctx.currentViolation.node)) {
+        row.forEachReplica(replicaInfo -> ctx.currentViolation
             .addReplica(new Violation.ReplicaInfoAndErr(replicaInfo)
-                .withDelta(ctx.clause.tag.delta(r.getVal(ImplicitSnitch.CORES)))));
+                .withDelta(ctx.currentViolation.replicaCountDelta)));
       }
     }
+
 
   }
 
@@ -52,18 +53,63 @@ public class CoresVariable extends VariableBase {
       for (int i = 0; i < Math.abs(ctx.violation.replicaCountDelta); i++) {
         Suggester suggester = ctx.session.getSuggester(MOVEREPLICA)
             .hint(Suggester.Hint.SRC_NODE, ctx.violation.node);
-        ctx.addSuggestion(suggester);
+        if (ctx.addSuggestion(suggester) == null) break;
       }
     }
   }
 
   @Override
   public void projectAddReplica(Cell cell, ReplicaInfo ri, Consumer<Row.OperationInfo> ops, boolean strictMode) {
-    cell.val = cell.val == null ? 0 : ((Number) cell.val).longValue() + 1;
+    cell.val = cell.val == null ? 0 : ((Number) cell.val).doubleValue() + 1;
   }
 
   @Override
   public void projectRemoveReplica(Cell cell, ReplicaInfo ri, Consumer<Row.OperationInfo> opCollector) {
-    cell.val = cell.val == null ? 0 : ((Number) cell.val).longValue() - 1;
+    cell.val = cell.val == null ? 0 : ((Number) cell.val).doubleValue() - 1;
+  }
+
+  @Override
+  public Object computeValue(Policy.Session session, Condition condition, String collection, String shard, String node) {
+    if (condition.computedType == ComputedType.EQUAL) {
+      AtomicInteger liveNodes = new AtomicInteger(0);
+      int coresCount = getTotalCores(session, liveNodes);
+      int numBuckets = condition.clause.tag.op == Operand.IN ?
+          ((Collection) condition.clause.tag.val).size() :
+          liveNodes.get();
+      return numBuckets == 0 || coresCount == 0 ? 0d : (double) coresCount / (double) numBuckets;
+    } else if (condition.computedType == ComputedType.PERCENT) {
+      return ComputedType.PERCENT.compute(getTotalCores(session, new AtomicInteger()), condition);
+    } else {
+      throw new IllegalArgumentException("Invalid computed type in " + condition);
+    }
+  }
+
+  private int getTotalCores(Policy.Session session, AtomicInteger liveNodes) {
+    int[] coresCount = new int[1];
+    for (Row row : session.matrix) {
+      if (!row.isLive) continue;
+      liveNodes.incrementAndGet();
+      row.forEachReplica(replicaInfo -> coresCount[0]++);
+    }
+    return coresCount[0];
+  }
+
+  @Override
+  public String postValidate(Condition condition) {
+    Condition nodeTag = condition.getClause().getTag();
+    if (nodeTag.varType != Type.NODE) return "'cores' attribute can only be used with 'node' attribute";
+    if (condition.computedType == ComputedType.EQUAL) {
+      if (nodeTag.name.equals("node") && (nodeTag.op == Operand.WILDCARD || nodeTag.op == Operand.IN)) {
+        return null;
+      } else {
+        return "cores: '#EQUAL' can be used only with node: '#ANY', node :[....]";
+      }
+    }
+    return null;
+  }
+
+  @Override
+  public Operand getOperand(Operand expected, Object strVal, ComputedType computedType) {
+    return ReplicaVariable.checkForRangeOperand(expected, strVal, computedType);
   }
 }
