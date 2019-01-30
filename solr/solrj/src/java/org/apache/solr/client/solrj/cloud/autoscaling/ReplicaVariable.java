@@ -20,7 +20,6 @@ package org.apache.solr.client.solrj.cloud.autoscaling;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.solr.common.util.StrUtils;
 
@@ -30,16 +29,27 @@ class ReplicaVariable extends VariableBase {
     super(type);
   }
 
+  public static final String REPLICASCOUNT = "relevantReplicas";
+
+
+
+
   static int getRelevantReplicasCount(Policy.Session session, Condition cv, String collection, String shard) {
-    AtomicInteger totalReplicasOfInterest = new AtomicInteger(0);
+    int totalReplicasOfInterest = 0;
     Clause clause = cv.getClause();
     for (Row row : session.matrix) {
-      row.forEachReplica(replicaInfo -> {
-        if (clause.isMatch(replicaInfo, collection, shard))
-          totalReplicasOfInterest.incrementAndGet();
+      Integer perShardCount = row.computeCacheIfAbsent(collection, shard, REPLICASCOUNT, cv.clause, o -> {
+        int[] result = new int[1];
+        row.forEachReplica(collection, replicaInfo -> {
+          if (clause.isMatch(replicaInfo, collection, shard))
+            result[0]++;
+        });
+        return result[0];
       });
+      if (perShardCount != null)
+        totalReplicasOfInterest += perShardCount;
     }
-    return totalReplicasOfInterest.get();
+    return totalReplicasOfInterest;
   }
 
   @Override
@@ -88,13 +98,28 @@ class ReplicaVariable extends VariableBase {
       } else {
         return "'replica': '#EQUAL` must be used with 'node':'#ANY'";
       }
-    }
-    if (condition.computedType == ComputedType.ALL) {
+    } else if (condition.computedType == ComputedType.ALL) {
       if (condition.getClause().tag != null && (condition.getClause().getTag().op == Operand.IN ||
           condition.getClause().getTag().op == Operand.WILDCARD)) {
         return StrUtils.formatString("array value or wild card cannot be used for tag {0} with replica : '#ALL'",
             condition.getClause().tag.getName());
       }
+    } else {
+      return checkNonEqualOp(condition);
+    }
+
+    return null;
+  }
+
+  static String checkNonEqualOp(Condition condition) {
+    if (condition.computedType == null &&
+        condition.val instanceof RangeVal &&
+        condition.op != Operand.RANGE_EQUAL) {
+      return "non-integer values cannot have any other operators";
+    }
+
+    if(condition.computedType == ComputedType.PERCENT && condition.op != Operand.RANGE_EQUAL){
+      return "percentage values cannot have any other operators";
     }
     return null;
   }

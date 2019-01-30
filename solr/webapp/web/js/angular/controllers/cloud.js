@@ -16,7 +16,7 @@
 */
 
 solrAdminApp.controller('CloudController',
-    function($scope, $location, Zookeeper, Constants, Collections, System, Metrics) {
+    function($scope, $location, Zookeeper, Constants, Collections, System, Metrics, ZookeeperStatus) {
 
         $scope.showDebug = false;
 
@@ -32,15 +32,15 @@ solrAdminApp.controller('CloudController',
         if (view === "tree") {
             $scope.resetMenu("cloud-tree", Constants.IS_ROOT_PAGE);
             treeSubController($scope, Zookeeper);
-        } else if (view === "rgraph") {
-            $scope.resetMenu("cloud-rgraph", Constants.IS_ROOT_PAGE);
-            graphSubController($scope, Zookeeper, true);
         } else if (view === "graph") {
             $scope.resetMenu("cloud-graph", Constants.IS_ROOT_PAGE);
             graphSubController($scope, Zookeeper, false);
         } else if (view === "nodes") {
             $scope.resetMenu("cloud-nodes", Constants.IS_ROOT_PAGE);
             nodesSubController($scope, Collections, System, Metrics);
+        } else if (view === "zkstatus") {
+            $scope.resetMenu("cloud-zkstatus", Constants.IS_ROOT_PAGE);
+            zkStatusSubController($scope, ZookeeperStatus, false);
         }
     }
 );
@@ -404,13 +404,18 @@ var nodesSubController = function($scope, Collections, System, Metrics) {
               if (cores) {
                 for (coreId in cores) {
                   var core = cores[coreId];
-                  var keyName = "solr.core." + core['core'].replace('_', '.').replace('_', '.');
+                  var keyName = "solr.core." + core['core'].replace(/(.*?)_(shard(\d+_?)+)_(replica.*?)/, '\$1.\$2.\$4');
                   var nodeMetric = m.metrics[keyName];
                   var size = nodeMetric['INDEX.sizeInBytes'];
                   size = (typeof size !== 'undefined') ? size : 0;
                   core['sizeInBytes'] = size;
                   core['size'] = bytesToSize(size);
-                  core['label'] = core['core'].replace('_shard', '_s').replace(/_replica_./, 'r');
+                  core['label'] = core['core'].replace(/(.*?)_shard((\d+_?)+)_replica_?[ntp]?(\d+)/, '\$1_s\$2r\$4');
+                  if (core['shard_state'] !== 'active' || core['state'] !== 'active') {
+                    // If core state is not active, display the real state, or if shard is inactive, display that
+                    var labelState = (core['state'] !== 'active') ? core['state'] : core['shard_state'];
+                    core['label'] += "_(" + labelState + ")";
+                  }
                   indexSizeTotal += size;
                   var numDocs = nodeMetric['SEARCHER.searcher.numDocs'];
                   numDocs = (typeof numDocs !== 'undefined') ? numDocs : 0;
@@ -486,7 +491,39 @@ var nodesSubController = function($scope, Collections, System, Metrics) {
   $scope.initClusterState();
 };
 
+var zkStatusSubController = function($scope, ZookeeperStatus) {
+    $scope.showZkStatus = true;
+    $scope.showNodes = false;
+    $scope.showTree = false;
+    $scope.showGraph = false;
+    $scope.tree = {};
+    $scope.showData = false;
+    $scope.showDetails = false;
+    
+    $scope.toggleDetails = function() {
+      $scope.showDetails = !$scope.showDetails === true;
+    };
+
+    $scope.initZookeeper = function() {
+      ZookeeperStatus.monitor({}, function(data) {
+        $scope.zkState = data.zkStatus;
+        $scope.mainKeys = ["ok", "clientPort", "zk_server_state", "zk_version", 
+          "zk_approximate_data_size", "zk_znode_count", "zk_num_alive_connections"];
+        $scope.detailKeys = ["dataDir", "dataLogDir", 
+          "zk_avg_latency", "zk_max_file_descriptor_count", "zk_watch_count", 
+          "zk_packets_sent", "zk_packets_received",
+          "tickTime", "maxClientCnxns", "minSessionTimeout", "maxSessionTimeout"];
+        $scope.ensembleMainKeys = ["serverId", "electionPort", "quorumPort"];
+        $scope.ensembleDetailKeys = ["peerType", "electionAlg", "initLimit", "syncLimit",
+          "zk_followers", "zk_synced_followers", "zk_pending_syncs"];
+      });
+    };
+
+    $scope.initZookeeper();
+};
+
 var treeSubController = function($scope, Zookeeper) {
+    $scope.showZkStatus = false;
     $scope.showTree = true;
     $scope.showGraph = false;
     $scope.tree = {};
@@ -544,7 +581,8 @@ function secondsForHumans ( seconds ) {
     return returntext.trim() === '' ? '0m' : returntext.trim();
 }
 
-var graphSubController = function ($scope, Zookeeper, isRadial) {
+var graphSubController = function ($scope, Zookeeper) {
+    $scope.showZkStatus = false;
     $scope.showTree = false;
     $scope.showGraph = true;
 
@@ -699,7 +737,7 @@ var graphSubController = function ($scope, Zookeeper, isRadial) {
                     $scope.helperData.state = $.unique($scope.helperData.state);
                     $scope.helperData.core_node = $.unique($scope.helperData.core_node);
 
-                    if (!isRadial && data.znode && data.znode.paging) {
+                    if (data.znode && data.znode.paging) {
                         $scope.showPaging = true;
 
                         var parr = data.znode.paging.split('|');
@@ -733,7 +771,6 @@ var graphSubController = function ($scope, Zookeeper, isRadial) {
                     }
                     $scope.graphData = graph_data;
                     $scope.leafCount = leaf_count;
-                    $scope.isRadial = isRadial;
                 });
         });
     };
@@ -749,7 +786,6 @@ solrAdminApp.directive('graph', function(Constants) {
             data: "=",
             leafCount: "=",
             helperData: "=",
-            isRadial: "="
         },
         link: function (scope, element, attrs) {
             var helper_path_class = function (p) {
@@ -832,11 +868,7 @@ solrAdminApp.directive('graph', function(Constants) {
 
             scope.$watch("data", function(newValue, oldValue) {
                 if (newValue) {
-                    if (scope.isRadial) {
-                        radialGraph(element, scope.data, scope.leafCount);
-                    } else {
-                        flatGraph(element, scope.data, scope.leafCount);
-                    }
+                    flatGraph(element, scope.data, scope.leafCount);
                 }
 
                 $('text').tooltip({
@@ -923,61 +955,6 @@ solrAdminApp.directive('graph', function(Constants) {
 
                 setNodeNavigationBehavior(node);
             };
-
-            var radialGraph = function(element, graphData, leafCount) {
-                var max_val = Math.min(element.width(), $('body').height())
-                var r = max_val / 2;
-
-                var cluster = d3.layout.cluster()
-                    .size([360, r - 160]);
-
-                var diagonal = d3.svg.diagonal.radial()
-                    .projection(function (d) {
-                        return [d.y, d.x / 180 * Math.PI];
-                    });
-
-                d3.select('#canvas', element).html('');
-                var vis = d3.select('#canvas').append('svg')
-                    .attr('width', r * 2)
-                    .attr('height', r * 2)
-                    .append('g')
-                    .attr('transform', 'translate(' + r + ',' + r + ')');
-
-                var nodes = cluster.nodes(graphData);
-
-                var link = vis.selectAll('path.link')
-                    .data(cluster.links(nodes))
-                    .enter().append('path')
-                    .attr('class', helper_path_class)
-                    .attr('d', diagonal);
-
-                var node = vis.selectAll('g.node')
-                    .data(nodes)
-                    .enter().append('g')
-                    .attr('class', helper_node_class)
-                    .attr('transform', function (d) {
-                        return 'rotate(' + (d.x - 90) + ')translate(' + d.y + ')';
-                    })
-
-                node.append('circle')
-                    .attr('r', 4.5);
-
-                node.append('text')
-                    .attr('dx', function (d) {
-                        return d.x < 180 ? 8 : -8;
-                    })
-                    .attr('dy', '.31em')
-                    .attr('text-anchor', function (d) {
-                        return d.x < 180 ? 'start' : 'end';
-                    })
-                    .attr('transform', function (d) {
-                        return d.x < 180 ? null : 'rotate(180)';
-                    })
-                    .attr("title", helper_tooltip_text)
-                    .text(helper_node_text);
-
-                setNodeNavigationBehavior(node, "rgraph");
-            }
         }
     };
 });

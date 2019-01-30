@@ -16,17 +16,20 @@
  */
 package org.apache.lucene.document;
 
+
+import com.carrotsearch.randomizedtesting.generators.RandomNumbers;
+import org.apache.lucene.document.LatLonShape.QueryRelation;
+import org.apache.lucene.geo.EdgeTree;
+import org.apache.lucene.geo.GeoTestUtil;
 import org.apache.lucene.geo.Line;
-import org.apache.lucene.geo.Polygon;
+import org.apache.lucene.geo.Line2D;
 import org.apache.lucene.geo.Polygon2D;
+import org.apache.lucene.geo.Rectangle;
+import org.apache.lucene.geo.Rectangle2D;
 import org.apache.lucene.index.PointValues.Relation;
 
-import static org.apache.lucene.geo.GeoEncodingUtils.decodeLatitude;
-import static org.apache.lucene.geo.GeoEncodingUtils.decodeLongitude;
-import static org.apache.lucene.geo.GeoEncodingUtils.encodeLatitude;
-import static org.apache.lucene.geo.GeoEncodingUtils.encodeLongitude;
-
 /** random bounding box and polygon query tests for random generated {@link Line} types */
+@SuppressWarnings("SimpleText")
 public class TestLatLonLineShapeQueries extends BaseLatLonShapeTestCase {
 
   protected final LineValidator VALIDATOR = new LineValidator();
@@ -37,22 +40,65 @@ public class TestLatLonLineShapeQueries extends BaseLatLonShapeTestCase {
   }
 
   @Override
+  protected Line randomQueryLine(Object... shapes) {
+    if (random().nextInt(100) == 42) {
+      // we want to ensure some cross, so randomly generate lines that share vertices with the indexed point set
+      int maxBound = (int)Math.floor(shapes.length * 0.1d);
+      if (maxBound < 2) {
+        maxBound = shapes.length;
+      }
+      double[] lats = new double[RandomNumbers.randomIntBetween(random(), 2, maxBound)];
+      double[] lons = new double[lats.length];
+      for (int i = 0, j = 0; j < lats.length && i < shapes.length; ++i, ++j) {
+        Line l = (Line) (shapes[i]);
+        if (random().nextBoolean() && l != null) {
+          int v = random().nextInt(l.numPoints() - 1);
+          lats[j] = l.getLat(v);
+          lons[j] = l.getLon(v);
+        } else {
+          lats[j] = GeoTestUtil.nextLatitude();
+          lons[j] = GeoTestUtil.nextLongitude();
+        }
+      }
+      return new Line(lats, lons);
+    }
+    return nextLine();
+  }
+
+  @Override
   protected Field[] createIndexableFields(String field, Object line) {
     return LatLonShape.createIndexableFields(field, (Line)line);
   }
 
   @Override
-  protected Validator getValidator() {
+  protected Validator getValidator(QueryRelation queryRelation) {
+    VALIDATOR.setRelation(queryRelation);
     return VALIDATOR;
   }
 
-  protected class LineValidator implements Validator {
+  protected static class LineValidator extends Validator {
     @Override
     public boolean testBBoxQuery(double minLat, double maxLat, double minLon, double maxLon, Object shape) {
-      // to keep it simple we convert the bbox into a polygon and use poly2d
-      Polygon2D p = Polygon2D.create(new Polygon[] {new Polygon(new double[] {minLat, minLat, maxLat, maxLat, minLat},
-          new double[] {minLon, maxLon, maxLon, minLon, minLon})});
-      return testLine(p, (Line)shape);
+      Line line = (Line)shape;
+      Rectangle2D rectangle2D = Rectangle2D.create(new Rectangle(minLat, maxLat, minLon, maxLon));
+      for (int i = 0, j = 1; j < line.numPoints(); ++i, ++j) {
+        int[] decoded = encodeDecodeTriangle(line.getLon(i), line.getLat(i), line.getLon(j), line.getLat(j), line.getLon(i), line.getLat(i));
+        if (queryRelation == QueryRelation.WITHIN) {
+          if (rectangle2D.containsTriangle(decoded[1], decoded[0], decoded[3], decoded[2], decoded[5], decoded[4]) == false) {
+            return false;
+          }
+        } else {
+          if (rectangle2D.intersectsTriangle(decoded[1], decoded[0], decoded[3], decoded[2], decoded[5], decoded[4]) == true) {
+            return queryRelation == QueryRelation.INTERSECTS;
+          }
+        }
+      }
+      return queryRelation != QueryRelation.INTERSECTS;
+    }
+
+    @Override
+    public boolean testLineQuery(Line2D line2d, Object shape) {
+      return testLine(line2d, (Line) shape);
     }
 
     @Override
@@ -60,35 +106,20 @@ public class TestLatLonLineShapeQueries extends BaseLatLonShapeTestCase {
       return testLine(poly2d, (Line) shape);
     }
 
-    private boolean testLine(Polygon2D queryPoly, Line line) {
-      double ax, ay, bx, by, temp;
+    private boolean testLine(EdgeTree queryPoly, Line line) {
+
       for (int i = 0, j = 1; j < line.numPoints(); ++i, ++j) {
-        ay = decodeLatitude(encodeLatitude(line.getLat(i)));
-        ax = decodeLongitude(encodeLongitude(line.getLon(i)));
-        by = decodeLatitude(encodeLatitude(line.getLat(j)));
-        bx = decodeLongitude(encodeLongitude(line.getLon(j)));
-        if (ay > by) {
-          temp = ay;
-          ay = by;
-          by = temp;
-          temp = ax;
-          ax = bx;
-          bx = temp;
-        } else if (ay == by) {
-          if (ax > bx) {
-            temp = ay;
-            ay = by;
-            by = temp;
-            temp = ax;
-            ax = bx;
-            bx = temp;
-          }
-        }
-        if (queryPoly.relateTriangle(ax, ay, bx, by, ax, ay) != Relation.CELL_OUTSIDE_QUERY) {
-          return true;
+        double[] qTriangle = quantizeTriangle(line.getLon(i), line.getLat(i), line.getLon(j), line.getLat(j), line.getLon(i), line.getLat(i));
+        Relation r = queryPoly.relateTriangle(qTriangle[1], qTriangle[0], qTriangle[3], qTriangle[2], qTriangle[5], qTriangle[4]);
+        if (queryRelation == QueryRelation.DISJOINT) {
+          if (r != Relation.CELL_OUTSIDE_QUERY) return false;
+        } else if (queryRelation == QueryRelation.WITHIN) {
+          if (r != Relation.CELL_INSIDE_QUERY) return false;
+        } else {
+          if (r != Relation.CELL_OUTSIDE_QUERY) return true;
         }
       }
-      return false;
+      return queryRelation == QueryRelation.INTERSECTS ? false : true;
     }
   }
 }
