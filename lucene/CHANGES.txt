@@ -10,13 +10,55 @@ API Changes
 * LUCENE-8474: RAMDirectory and associated deprecated classes have been 
   removed. (Dawid Weiss)
 
+Bug fixes:
+
+* LUCENE-8663: NRTCachingDirectory.slowFileExists may open a file while 
+  it's inaccessible. (Dawid Weiss)
 
 ======================= Lucene 8.1.0 =======================
-(No Changes)
+
+Bug fixes
+
+* LUCENE-8712: Polygon2D does not detect crossings through segment edges.
+  (Ignacio Vera)
+
+* LUCENE-8720: NameIntCacheLRU (in the facets module) had an int
+  overflow bug that disabled cleaning of the cache (Russell A Brown)
+
+Improvements
+
+* LUCENE-8673: Use radix partitioning when merging dimensional points instead
+  of sorting all dimensions before hand. (Ignacio Vera, Adrien Grand)
+
+* LUCENE-8687: Optimise radix partitioning for points on heap. (Ignacio Vera)
+
+* LUCENE-8699: Change HeapPointWriter to use a single byte array instead to a list
+  of byte arrays. In addition a new interface PointValue is added to abstract out
+  the different formats between offline and on-heap writers. (Ignacio Vera)
+
+* LUCENE-8703: Build point writers in the BKD tree only when they are needed.
+  (Ignacio Vera)
+
+* LUCENE-8652: SynonymQuery can now deboost the document frequency of each term when
+  blending the score of the synonym. (Jim Ferenczi)
+
+* LUCENE-8631: The Korean's user dictionary now picks the longest-matching word and discards
+  the other matches. (Yeongsu Kim via Jim Ferenczi)
+
+Other
+
+* LUCENE-8680: Refactor EdgeTree#relateTriangle method. (Ignacio Vera)
+
+* LUCENE-8685: Refactor LatLonShape tests. (Ignacio Vera)
+
+* LUCENE-8713: Add Line2D tests. (Ignacio Vera)
 
 ======================= Lucene 8.0.0 =======================
 
 API Changes
+
+* LUCENE-8662: TermsEnum.seekExact(BytesRef) to abstract and delegate seekExact(BytesRef)
+  in FilterLeafReader.FilterTermsEnum. (Jeffery Yuan via Tomás Fernández Löbbe, Simon Willnauer)
 
 * LUCENE-8469: Deprecated StringHelper.compare has been removed. (Dawid Weiss)
 
@@ -116,6 +158,8 @@ API Changes
 * LUCENE-8609: Remove IndexWriter#numDocs() and IndexWriter#maxDoc() in favor
   of IndexWriter#getDocStats(). (Simon Willnauer)
 
+* LUCENE-8292: Make TermsEnum fully abstract. (Simon Willnauer)
+
 Changes in Runtime Behavior
 
 * LUCENE-8333: Switch MoreLikeThis.setMaxDocFreqPct to use maxDoc instead of
@@ -168,6 +212,12 @@ Changes in Runtime Behavior
   is instead calculated as a function of the sloppy frequency of the matching
   intervals. (Alan Woodward, Jim Ferenczi)
 
+* LUCENE-8635: FSTs can now remain off-heap, accessed via
+  IndexInput, and the default codec's term dictionary
+  (BlockTreeTermsReader) will now leave the FST for the terms index
+  off-heap for non-primary-key fields using MMapDirectory, reducing
+  heap usage for such fields. (Ankit Jain)
+
 New Features
 
 * LUCENE-8340: LongPoint#newDistanceFeatureQuery may be used to boost scores based on
@@ -199,6 +249,15 @@ New Features
   as if they came from another. (Alan Woodward)
 
 * LUCENE-8646: New interval functions: Intervals.prefix() and Intervals.wildcard()
+  (Alan Woodward)
+
+* LUCENE-8655: Add a getter in FunctionScoreQuery class in order to access to the 
+  underlying DoubleValuesSource. (Gérald Quaire via Alan Woodward)
+
+* LUCENE-8697: GraphTokenStreamFiniteStrings correctly handles side paths 
+  containing gaps (Alan Woodward)
+
+* LUCENE-8702: Simplify intervals returned from vararg Intervals factory methods
   (Alan Woodward)
 
 Improvements
@@ -263,6 +322,9 @@ Optimizations
 * LUCENE-8585: Index-time jump-tables for DocValues, for O(1) advance when retrieving doc values.
   (Toke Eskildsen, Adrien Grand)
 
+======================= Lucene 7.7.1 =======================
+(No Changes)
+
 ======================= Lucene 7.7.0 =======================
 
 Changes in Runtime Behavior
@@ -278,6 +340,9 @@ Build
 * LUCENE-8537: ant test command fails under lucene/tools (Peter Somogyi)
 
 Bug fixes:
+
+* LUCENE-8669: Fix LatLonShape WITHIN queries that fail with Multiple search Polygons
+  that share the dateline. (Nick Knize)
 
 * LUCENE-8603: Fix the inversion of right ids for additional nouns in the Korean user dictionary.
   (Yoo Jeongin via Jim Ferenczi)
@@ -300,6 +365,9 @@ Bug fixes:
 * LUCENE-8650: ConcatenatingTokenStream did not correctly clear its state in reset(), and
   was not propagating final position increments from its child streams correctly.
   (Dan Meehl, Alan Woodward)
+
+* LUCENE-8676: The Korean tokenizer does not update the last position if the backtrace is caused
+  by a big buffer (1024 chars). (Jim Ferenczi)
 
 New Features
 

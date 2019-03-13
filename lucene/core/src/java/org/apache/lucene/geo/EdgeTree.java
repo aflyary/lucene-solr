@@ -124,12 +124,12 @@ public abstract class EdgeTree {
     return Relation.CELL_OUTSIDE_QUERY;
   }
 
-  protected Relation componentRelate(double minLat, double maxLat, double minLon, double maxLon) {
-    return null;
-  }
-  protected Relation componentRelateTriangle(double ax, double ay, double bx, double by, double cx, double cy) {
-    return null;
-  }
+  /** Returns relation to the provided rectangle for this component */
+  protected abstract Relation componentRelate(double minLat, double maxLat, double minLon, double maxLon);
+
+  /** Returns relation to the provided triangle for this component */
+  protected abstract Relation componentRelateTriangle(double ax, double ay, double bx, double by, double cx, double cy);
+
 
   private Relation internalComponentRelateTriangle(double ax, double ay, double bx, double by, double cx, double cy) {
     // compute bounding box of triangle
@@ -140,22 +140,7 @@ public abstract class EdgeTree {
     if (maxLon < this.minLon || minLon > this.maxLon || maxLat < this.minLat || minLat > this.maxLat) {
       return Relation.CELL_OUTSIDE_QUERY;
     }
-
-    Relation shapeRelation = componentRelateTriangle(ax, ay, bx, by, cx, cy);
-    if (shapeRelation != null) {
-      return shapeRelation;
-    }
-
-    // we cross
-    if (tree.crossesTriangle(ax, ay, bx, by, cx, cy)) {
-      return Relation.CELL_CROSSES_QUERY;
-    }
-
-    if (pointInTriangle(tree.lon1, tree.lat1, ax, ay, bx, by, cx, cy) == true) {
-      return Relation.CELL_CROSSES_QUERY;
-    }
-
-    return Relation.CELL_OUTSIDE_QUERY;
+    return componentRelateTriangle(ax, ay, bx, by, cx, cy);
   }
 
 
@@ -169,18 +154,7 @@ public abstract class EdgeTree {
     if (minLat <= this.minLat && maxLat >= this.maxLat && minLon <= this.minLon && maxLon >= this.maxLon) {
       return Relation.CELL_CROSSES_QUERY;
     }
-
-    Relation shapeRelation = componentRelate(minLat, maxLat, minLon, maxLon);
-    if (shapeRelation != null) {
-      return shapeRelation;
-    }
-
-    // we cross
-    if (tree.crosses(minLat, maxLat, minLon, maxLon)) {
-      return Relation.CELL_CROSSES_QUERY;
-    }
-
-    return Relation.CELL_OUTSIDE_QUERY;
+    return componentRelate(minLat, maxLat, minLon, maxLon);
   }
 
   /** Creates tree from sorted components (with range low and high inclusive) */
@@ -237,6 +211,8 @@ public abstract class EdgeTree {
     // lat-lon pair (in original order) of the two vertices
     final double lat1, lat2;
     final double lon1, lon2;
+    //edge belongs to the dateline
+    final boolean dateline;
     /** min of this edge */
     final double low;
     /** max latitude of this edge or any children */
@@ -254,6 +230,8 @@ public abstract class EdgeTree {
       this.lon2 = lon2;
       this.low = low;
       this.max = max;
+      dateline = (lon1 == GeoUtils.MIN_LON_INCL && lon2 == GeoUtils.MIN_LON_INCL)
+          || (lon1 == GeoUtils.MAX_LON_INCL && lon2 == GeoUtils.MAX_LON_INCL);
     }
 
     /** Returns true if the triangle crosses any edge in this edge subtree */
@@ -277,7 +255,7 @@ public abstract class EdgeTree {
             (dx < minLon && ex < minLon) ||
             (dx > maxLon && ex > maxLon);
 
-        if (outside == false) {
+        if (dateline == false && outside == false) {
           // does triangle's first edge intersect polyline?
           // ax, ay -> bx, by
           if (lineCrossesLine(ax, ay, bx, by, dx, dy, ex, ey)) {
@@ -387,7 +365,7 @@ public abstract class EdgeTree {
   //This should be moved when LatLonShape is moved from sandbox!
   /**
    * Compute whether the given x, y point is in a triangle; uses the winding order method */
-  private static boolean pointInTriangle (double x, double y, double ax, double ay, double bx, double by, double cx, double cy) {
+  protected static boolean pointInTriangle (double x, double y, double ax, double ay, double bx, double by, double cx, double cy) {
     double minX = StrictMath.min(ax, StrictMath.min(bx, cx));
     double minY = StrictMath.min(ay, StrictMath.min(by, cy));
     double maxX = StrictMath.max(ax, StrictMath.max(bx, cx));
